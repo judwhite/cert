@@ -1,10 +1,12 @@
 package ca
 
 import (
-	"bytes"
-	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/judwhite/cert/internal/openssl"
 )
 
 func days() string {
@@ -12,23 +14,43 @@ func days() string {
 	return strconv.Itoa(int(time.Until(y2k38).Hours() / 24))
 }
 
-func RootKey() ([]byte, error) {
-	// openssl genrsa -out rootCA.key 4096
-	cmd := exec.Command("openssl", "genrsa", "4096")
-	return cmd.CombinedOutput()
-}
-
-func RootCertificate(rootKey []byte) ([]byte, error) {
+func RootCertificate(caPrivateKey []byte, caConfigFileName string) ([]byte, error) {
 	// openssl req -x509 -new -nodes -key rootCA.key -sha256 -days 1024 -out rootCA.crt
-	cmd := exec.Command("openssl", "req", "-x509", "-new", "-key", "-", "-nodes", "-sha256", "-days", days(), "-config", "ca.conf")
-	cmd.Stdin = bytes.NewReader(rootKey)
-	return cmd.CombinedOutput()
+
+	args := []string{
+		"req",
+		"-x509",
+		"-new",
+		"-nodes", // noDES
+		"-sha256",
+		"-days", days(),
+		"-config", caConfigFileName,
+		"-key", "-",
+	}
+
+	return openssl.Run(caPrivateKey, args...)
 }
 
-func Sign(rootKeyFileName, rootCertFileName string, csr []byte, configFileName string) ([]byte, error) {
+func Sign(caPrivateKey, rootCertFileName, caSerialFileName string, csr []byte, extFileName string) ([]byte, error) {
 	// openssl x509 -req -in mydomain.com.csr -CA rootCA.crt -CAkey rootCA.key -CAcreateserial -out mydomain.com.crt -days 500 -sha256 -extfile certificate.conf -extensions req_ext
-	cmd := exec.Command("openssl", "x509", "-req", "-CA", rootCertFileName, "-CAkey", rootKeyFileName, "-CAcreateserial", "-days", days(), "-sha256", "-extfile", configFileName, "-extensions", "req_ext")
-	cmd.Stdin = bytes.NewReader(csr)
-	return cmd.CombinedOutput()
 
+	if caSerialFileName == "" {
+		caSerialFileName = strings.TrimSuffix(caPrivateKey, filepath.Ext(caPrivateKey)) + ".srl"
+	}
+
+	args := []string{
+		"x509",
+		"-req",
+		"-CA", rootCertFileName,
+		"-CAkey", caPrivateKey,
+		"-CAcreateserial",
+		"-CAserial", caSerialFileName,
+		"-days", days(),
+		"-sha256",
+		"-extfile", extFileName,
+		"-extensions", "x509_ext",
+		"-",
+	}
+
+	return openssl.Run(csr, args...)
 }

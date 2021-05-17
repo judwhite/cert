@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -14,17 +15,44 @@ import (
 const caKeyFile = "ca.key"
 const caCertFile = "ca.crt"
 
-func SetupCA() {
-	rootKey, err := ca.RootKey()
-	if err != nil {
-		fmt.Printf("%s\n", rootKey)
-		log.Fatalf("ca.RootKey: %v", err)
+func main() {
+	var mysql bool
+
+	flag.BoolVar(&mysql, "mysql", false, "Output config suitable for MySQL my.cnf")
+	flag.Parse()
+
+	SetupCA("config/ca.conf")
+	CreatePrivateKeyAndCert("config/client.conf")
+	CreatePrivateKeyAndCert("config/server.conf")
+
+	if err := LiveTest(); err != nil {
+		log.Fatal(err)
 	}
 
-	rootCert, err := ca.RootCertificate(rootKey)
+	if mysql {
+		fmt.Println()
+		fmt.Printf("[mysqld]\n")
+		fmt.Printf("default_time_zone=\"+00:00\"\n")
+		fmt.Printf("require_secure_transport=ON\n")
+		fmt.Printf("tls_version=TLSv1.3\n")
+		fmt.Printf("default_authentication_plugin=caching_sha2_password\n")
+		fmt.Printf("ssl-ca=ca.crt\n")
+		fmt.Printf("ssl-cert=server.crt\n")
+		fmt.Printf("ssl-key=server.key\n")
+		fmt.Println()
+		fmt.Printf("connection string: <LOGIN>@tcp(<SERVER>:3306)/<DATABASE>?tls=custom&parseTime=true&serverPubKey=%s\n", "MySQL")
+	}
+}
+
+func SetupCA(caConfigFileName string) {
+	rootKey, err := cert.PrivateKey(4096)
 	if err != nil {
-		fmt.Printf("%s\n", rootCert)
-		log.Fatalf("ca.RootCertificate: %v", err)
+		log.Fatalf("\n%s\n%v", rootKey, err)
+	}
+
+	rootCert, err := ca.RootCertificate(rootKey, caConfigFileName)
+	if err != nil {
+		log.Fatalf("\n%s\n%v", rootCert, err)
 	}
 
 	// Save CA root key and certificate
@@ -35,29 +63,28 @@ func SetupCA() {
 	if err := ioutil.WriteFile(caCertFile, rootCert, 0644); err != nil {
 		log.Fatal(err)
 	}
+
+	fmt.Println()
 }
 
 func CreatePrivateKeyAndCert(configFileName string) {
 	// Create private key and certificate signing request
 
-	privateKey, err := cert.PrivateKey()
+	privateKey, err := cert.PrivateKey(2048)
 	if err != nil {
-		fmt.Printf("%s\n", privateKey)
-		log.Fatalf("cert.PrivateKey: %v", err)
+		log.Fatalf("\n%s\n%v", privateKey, err)
 	}
 
 	csr, err := cert.CSR(privateKey, configFileName)
 	if err != nil {
-		fmt.Printf("%s\n", csr)
-		log.Fatalf("cert.CSR: %v", err)
+		log.Fatalf("\n%s\n%v", csr, err)
 	}
 
 	// Sign the cert
 
-	signedCert, err := ca.Sign(caKeyFile, caCertFile, csr, "client.conf")
+	signedCert, err := ca.Sign(caKeyFile, caCertFile, "", csr, configFileName)
 	if err != nil {
-		fmt.Printf("%s\n", signedCert)
-		log.Fatalf("ca.Sign: %v", err)
+		log.Fatalf("\n%s\n%v", signedCert, err)
 	}
 
 	// Save private key signed cert
@@ -75,17 +102,13 @@ func CreatePrivateKeyAndCert(configFileName string) {
 		log.Fatal(err)
 	}
 
-	// Verify!
+	// Verify
 
 	output, err := cert.Verify(caCertFile, signedCertFile)
-	fmt.Print(output)
 	if err != nil {
-		log.Fatalf("cert.Verify: %v", err)
+		log.Fatalf("\n%s\n%v", output, err)
 	}
-}
+	fmt.Print(output)
 
-func main() {
-	SetupCA()
-	CreatePrivateKeyAndCert("client.conf")
-	CreatePrivateKeyAndCert("server.conf")
+	fmt.Println()
 }
